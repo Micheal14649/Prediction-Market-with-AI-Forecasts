@@ -71,6 +71,11 @@
   }
 )
 
+(define-map market-subsidies
+  uint
+  uint
+)
+
 (define-read-only (get-market (market-id uint))
   (map-get? markets market-id)
 )
@@ -177,6 +182,8 @@
     (asserts! (not (get resolved market)) err-already-resolved)
     (asserts! (<= stacks-block-height (get deadline market)) err-market-closed)
 
+    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+
     (if position
       (begin
         (map-set markets market-id
@@ -220,6 +227,8 @@
       err-insufficient-reputation
     )
     (asserts! (is-none (map-get? ai-bets market-id)) err-already-claimed)
+
+    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
 
     (if position
       (map-set markets market-id
@@ -406,14 +415,18 @@
           (get total-no market)
           (get total-yes market)
         ))
+        (subsidy (default-to u0 (map-get? market-subsidies market-id)))
         (payout (if (> total-winning-pool u0)
           (+ winning-amount
-            (/ (* winning-amount total-losing-pool) total-winning-pool)
-          )
+            (/ (* winning-amount (+ total-losing-pool subsidy))
+              total-winning-pool
+            ))
           u0
         ))
       )
       (asserts! (> payout u0) err-no-winnings)
+
+      (try! (as-contract (stx-transfer? payout tx-sender contract-caller)))
 
       (map-set user-bets {
         market-id: market-id,
@@ -447,13 +460,16 @@
           (get total-no market)
           (get total-yes market)
         ))
+        (subsidy (default-to u0 (map-get? market-subsidies market-id)))
         (payout (if (> total-winning-pool u0)
           (+ (get amount ai-bet-info)
-            (/ (* (get amount ai-bet-info) total-losing-pool) total-winning-pool)
-          )
+            (/ (* (get amount ai-bet-info) (+ total-losing-pool subsidy))
+              total-winning-pool
+            ))
           u0
         ))
       )
+      (try! (as-contract (stx-transfer? payout tx-sender (var-get ai-agent))))
       (map-set ai-bets market-id (merge ai-bet-info { claimed: true }))
       (ok payout)
     )
@@ -464,6 +480,23 @@
   (begin
     (asserts! (is-eq tx-sender contract-owner) err-owner-only)
     (var-set ai-agent new-agent)
+    (ok true)
+  )
+)
+
+(define-public (add-subsidy
+    (market-id uint)
+    (amount uint)
+  )
+  (let ((market (unwrap! (map-get? markets market-id) err-not-found)))
+    (asserts! (> amount u0) err-invalid-amount)
+    (asserts! (not (get resolved market)) err-already-resolved)
+
+    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+
+    (map-set market-subsidies market-id
+      (+ (default-to u0 (map-get? market-subsidies market-id)) amount)
+    )
     (ok true)
   )
 )
